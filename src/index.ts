@@ -207,39 +207,44 @@ class HarvestServer {
     };
   }
 
-  private async findProject(text: string, isLeave: boolean = false, leaveType?: keyof typeof LEAVE_PATTERNS): Promise<number> {
-    const response = await this.axiosInstance.get('/projects');
-    const projects = response.data.projects;
+  private async findProjectAndTasks(text: string, isLeave: boolean = false, leaveType?: keyof typeof LEAVE_PATTERNS): Promise<{ projectId: number; taskAssignments: any[] }> {
+    const response = await this.axiosInstance.get('/users/me/project_assignments');
+    const projectAssignments = response.data.project_assignments;
     
     if (isLeave && leaveType) {
       // For leave requests, look for the specific leave project
-      const leaveProject = projects.find((p: { name: string; id: number }) => 
-        p.name === LEAVE_PATTERNS[leaveType].project
+      const leaveProjectAssignment = projectAssignments.find((pa: { project: { name: string; id: number }; task_assignments: any[] }) => 
+        pa.project.name === LEAVE_PATTERNS[leaveType].project
       );
-      if (leaveProject) {
-        return leaveProject.id;
+      if (leaveProjectAssignment) {
+        return {
+          projectId: leaveProjectAssignment.project.id,
+          taskAssignments: leaveProjectAssignment.task_assignments
+        };
       }
     }
     
     // For regular entries or if leave project not found
-    const projectMatch = projects.find((p: { name: string; id: number }) => 
-      text.toLowerCase().includes(p.name.toLowerCase())
-    );
+    const projectMatch = projectAssignments.find((pa: { project: { name: string; code: string; id: number }; task_assignments: any[] }) => {
+      const lowerText = text.toLowerCase();
+      return lowerText.includes(pa.project.name.toLowerCase()) || 
+             (pa.project.code && lowerText.includes(pa.project.code.toLowerCase()));
+    });
 
     if (!projectMatch) {
       throw new McpError(ErrorCode.InvalidParams, 'Could not find matching project');
     }
 
-    return projectMatch.id;
+    return {
+      projectId: projectMatch.project.id,
+      taskAssignments: projectMatch.task_assignments
+    };
   }
 
-  private async findTask(projectId: number, text: string, isLeave: boolean = false, leaveType?: keyof typeof LEAVE_PATTERNS): Promise<number> {
-    const response = await this.axiosInstance.get(`/projects/${projectId}/task_assignments`);
-    const tasks = response.data.task_assignments;
-
+  private findTask(taskAssignments: any[], text: string, isLeave: boolean = false, leaveType?: keyof typeof LEAVE_PATTERNS): number {
     if (isLeave && leaveType) {
       // For leave requests, look for the specific leave task
-      const leaveTask = tasks.find((t: { task: { name: string; id: number } }) => 
+      const leaveTask = taskAssignments.find((t: { task: { name: string; id: number } }) => 
         t.task.name === LEAVE_PATTERNS[leaveType].task
       );
       if (leaveTask) {
@@ -248,13 +253,13 @@ class HarvestServer {
     }
 
     // For regular entries or if leave task not found
-    const taskMatch = tasks.find((t: { task: { name: string; id: number } }) => 
+    const taskMatch = taskAssignments.find((t: { task: { name: string; id: number } }) => 
       text.toLowerCase().includes(t.task.name.toLowerCase())
     );
 
     if (!taskMatch) {
       // Default to first task if no match found
-      return tasks[0].task.id;
+      return taskAssignments[0].task.id;
     }
 
     return taskMatch.task.id;
@@ -342,11 +347,11 @@ class HarvestServer {
             // Parse time entry details
             const { spent_date, hours, isLeave, leaveType } = await this.parseTimeEntry(text);
             
-            // Find matching project
-            const project_id = await this.findProject(text, isLeave, leaveType);
+            // Find matching project and get task assignments
+            const { projectId: project_id, taskAssignments } = await this.findProjectAndTasks(text, isLeave, leaveType);
             
             // Find matching task
-            const task_id = await this.findTask(project_id, text, isLeave, leaveType);
+            const task_id = this.findTask(taskAssignments, text, isLeave, leaveType);
             
             // Create time entry
             const response = await this.axiosInstance.post('/time_entries', {
@@ -380,15 +385,16 @@ class HarvestServer {
         }
 
         case 'list_projects': {
-          const response = await this.axiosInstance.get('/projects');
+          const response = await this.axiosInstance.get('/users/me/project_assignments');
+          //console.log(response.data);
           return {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(response.data.projects.map((p: { id: number; name: string; code: string; is_active: boolean }) => ({
-                  id: p.id,
-                  name: p.name,
-                  code: p.code,
+                text: JSON.stringify(response.data.project_assignments.map((p: {project: { id: number; name: string; code: string; }, is_active: boolean}) => ({
+                  id: p.project.id,
+                  name: p.project.name,
+                  code: p.project.code,
                   is_active: p.is_active,
                 })), null, 2),
               },
