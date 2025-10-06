@@ -380,15 +380,16 @@ class HarvestServer {
         }
 
         case 'list_projects': {
-          const response = await this.axiosInstance.get('/projects');
+          const response = await this.axiosInstance.get('/users/me/project_assignments');
+          //console.log(response.data);
           return {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(response.data.projects.map((p: { id: number; name: string; code: string; is_active: boolean }) => ({
-                  id: p.id,
-                  name: p.name,
-                  code: p.code,
+                text: JSON.stringify(response.data.project_assignments.map((p: {project: { id: number; name: string; code: string; }, is_active: boolean}) => ({
+                  id: p.project.id,
+                  name: p.project.name,
+                  code: p.project.code,
                   is_active: p.is_active,
                 })), null, 2),
               },
