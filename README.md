@@ -41,6 +41,8 @@ npm run build
 node build/setup.js
 ```
 
+If you are doing this in the Claude CLI, you can copy the info into your `~/.claude.json` file.
+
 5. Follow the prompts to enter your:
    - Harvest Personal Access Token (from https://id.getharvest.com/developers)
    - Harvest Account ID
@@ -50,6 +52,7 @@ node build/setup.js
 6. Restart Claude desktop app
 
 That's it! You can now use natural language time tracking in Claude.
+
 
 ### Staying Updated
 
