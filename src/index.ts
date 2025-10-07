@@ -404,12 +404,25 @@ class HarvestServer {
 
         case 'list_tasks': {
           const { project_id } = request.params.arguments as { project_id: number };
-          const response = await this.axiosInstance.get(`/projects/${project_id}/task_assignments`);
+          
+          // Get user's project assignments
+          const response = await this.axiosInstance.get('/users/me/project_assignments');
+          const projectAssignments = response.data.project_assignments;
+          
+          // Find the specific project assignment
+          const projectAssignment = projectAssignments.find((pa: { project: { id: number }; task_assignments: any[] }) => 
+            pa.project.id === project_id
+          );
+          
+          if (!projectAssignment) {
+            throw new McpError(ErrorCode.InvalidParams, `Project with ID ${project_id} not found or not accessible`);
+          }
+          
           return {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(response.data.task_assignments.map((t: { task: { id: number; name: string } }) => ({
+                text: JSON.stringify(projectAssignment.task_assignments.map((t: { task: { id: number; name: string } }) => ({
                   id: t.task.id,
                   name: t.task.name,
                 })), null, 2),
