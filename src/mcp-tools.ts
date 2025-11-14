@@ -7,26 +7,12 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import * as chrono from 'chrono-node';
 import axios from 'axios';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { HarvestClient } from './harvest-client.js';
 import { Config } from './config.js';
 import { Logger } from './logger.js';
-
-// Special patterns for leave requests
-const LEAVE_PATTERNS = {
-  sick: {
-    triggers: ['sick', 'ill', 'unwell'],
-    project: '[LV] Leave',
-    task: "Person (Sick/Carer's) Leave",
-  },
-  annual: {
-    triggers: ['annual leave', 'vacation', 'holiday', 'time off'],
-    project: '[LV] Leave',
-    task: 'Annual Leave',
-  }
-};
+import { parseTimeEntry, parseDateRange, LEAVE_PATTERNS, LeaveType } from './parsers.js';
 
 export class McpToolHandlers {
   private config: Config;
@@ -37,121 +23,12 @@ export class McpToolHandlers {
     this.logger = logger;
   }
 
-  private isLeaveRequest(text: string): { isLeave: boolean; type?: keyof typeof LEAVE_PATTERNS } {
-    const lowercaseText = text.toLowerCase();
-    for (const [type, pattern] of Object.entries(LEAVE_PATTERNS)) {
-      if (pattern.triggers.some(trigger => lowercaseText.includes(trigger))) {
-        return { isLeave: true, type: type as keyof typeof LEAVE_PATTERNS };
-      }
-    }
-    return { isLeave: false };
-  }
-
-  private parseDateRange(text: string): { from: string; to: string } {
-    const lowercaseText = text.toLowerCase();
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: this.config.timezone }));
-
-    // Handle common time ranges
-    if (lowercaseText.includes('last month')) {
-      const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const to = new Date(now.getFullYear(), now.getMonth(), 0);
-      return {
-        from: from.toISOString().split('T')[0],
-        to: to.toISOString().split('T')[0]
-      };
-    }
-
-    if (lowercaseText.includes('this month')) {
-      const from = new Date(now.getFullYear(), now.getMonth(), 1);
-      const to = now;
-      return {
-        from: from.toISOString().split('T')[0],
-        to: to.toISOString().split('T')[0]
-      };
-    }
-
-    if (lowercaseText.includes('this week')) {
-      const from = new Date(now);
-      from.setDate(now.getDate() - now.getDay());
-      return {
-        from: from.toISOString().split('T')[0],
-        to: now.toISOString().split('T')[0]
-      };
-    }
-
-    if (lowercaseText.includes('last week')) {
-      const from = new Date(now);
-      from.setDate(now.getDate() - now.getDay() - 7);
-      const to = new Date(from);
-      to.setDate(from.getDate() + 6);
-      return {
-        from: from.toISOString().split('T')[0],
-        to: to.toISOString().split('T')[0]
-      };
-    }
-
-    // Default to parsing with chrono
-    const dates = chrono.parse(text);
-    if (dates.length === 0) {
-      throw new McpError(ErrorCode.InvalidParams, 'Could not parse date range from input');
-    }
-
-    return {
-      from: dates[0].start.date().toISOString().split('T')[0],
-      to: (dates[0].end?.date() || dates[0].start.date()).toISOString().split('T')[0]
-    };
-  }
-
-  private async parseTimeEntry(text: string) {
-    const lowercaseText = text.toLowerCase();
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: this.config.timezone }));
-
-    // Check if this is a leave request
-    const leaveCheck = this.isLeaveRequest(text);
-    if (leaveCheck.isLeave && leaveCheck.type) {
-      // For leave requests, use the full work day
-      return {
-        spent_date: now.toISOString().split('T')[0],
-        hours: this.config.standardWorkDayHours,
-        isLeave: true,
-        leaveType: leaveCheck.type
-      };
-    }
-
-    // For regular time entries
-    let date: Date;
-    if (lowercaseText.includes('today')) {
-      date = now;
-    } else {
-      const parsed = chrono.parseDate(text);
-      if (!parsed) {
-        throw new McpError(ErrorCode.InvalidParams, 'Could not parse date from input');
-      }
-      date = parsed;
-    }
-
-    // Extract hours/minutes
-    const durationMatch = text.match(/(\d+(?:\.\d+)?)\s*(hour|hr|h|minute|min|m)s?/i);
-    if (!durationMatch) {
-      throw new McpError(ErrorCode.InvalidParams, 'Could not parse duration from input');
-    }
-
-    const amount = parseFloat(durationMatch[1]);
-    const unit = durationMatch[2].toLowerCase();
-    const hours = unit.startsWith('h') ? amount : amount / 60;
-
-    return {
-      spent_date: date.toISOString().split('T')[0],
-      hours,
-      isLeave: false
-    };
-  }
 
   private async findProjectAndTasks(
     client: HarvestClient,
     text: string,
     isLeave: boolean = false,
-    leaveType?: keyof typeof LEAVE_PATTERNS
+    leaveType?: LeaveType
   ): Promise<{ projectId: number; taskAssignments: any[] }> {
     const projectAssignments = await client.getProjectAssignments();
 
@@ -189,7 +66,7 @@ export class McpToolHandlers {
     taskAssignments: any[],
     text: string,
     isLeave: boolean = false,
-    leaveType?: keyof typeof LEAVE_PATTERNS
+    leaveType?: LeaveType
   ): number {
     if (isLeave && leaveType) {
       // For leave requests, look for the specific leave task
@@ -301,7 +178,11 @@ export class McpToolHandlers {
             this.logger.info({ tool: 'log_time', text }, 'Processing log_time request');
 
             // Parse time entry details
-            const { spent_date, hours, isLeave, leaveType } = await this.parseTimeEntry(text);
+            const { spent_date, hours, isLeave, leaveType } = parseTimeEntry(
+              text,
+              this.config.standardWorkDayHours,
+              this.config.timezone
+            );
 
             // Find matching project and get task assignments
             const { projectId: project_id, taskAssignments } = await this.findProjectAndTasks(client, text, isLeave, leaveType);
@@ -410,7 +291,7 @@ export class McpToolHandlers {
           try {
             this.logger.info({ tool: 'get_time_report', text }, 'Processing get_time_report request');
 
-            const { from, to } = this.parseDateRange(text);
+            const { from, to } = parseDateRange(text, this.config.timezone);
             const lowercaseText = text.toLowerCase();
 
             let endpoint = '/reports/time/projects'; // default to project report
