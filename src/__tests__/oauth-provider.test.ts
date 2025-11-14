@@ -431,9 +431,24 @@ describe('OAuth Provider Endpoints', () => {
     });
 
     it('should reject invalid Bearer token', async () => {
+      const initializeRequest = {
+        jsonrpc: '2.0',
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: {
+            name: 'test-client',
+            version: '1.0.0',
+          },
+        },
+        id: 1,
+      };
+
       const response = await request(app)
-        .get('/mcp')
+        .post('/mcp')
         .set('Authorization', 'Bearer invalid-token-12345')
+        .send(initializeRequest)
         .expect(401);
 
       expect(response.body).toMatchObject({
@@ -443,9 +458,24 @@ describe('OAuth Provider Endpoints', () => {
     });
 
     it('should reject malformed Authorization header', async () => {
+      const initializeRequest = {
+        jsonrpc: '2.0',
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: {
+            name: 'test-client',
+            version: '1.0.0',
+          },
+        },
+        id: 1,
+      };
+
       const response = await request(app)
-        .get('/mcp')
+        .post('/mcp')
         .set('Authorization', 'InvalidScheme token-here')
+        .send(initializeRequest)
         .expect(401);
 
       expect(response.body).toMatchObject({

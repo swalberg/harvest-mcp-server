@@ -8,8 +8,9 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { createRequire } from 'module';
 import { randomBytes } from 'crypto';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { Config } from './config.js';
 import { Logger } from './logger.js';
 import { OAuthService } from './oauth.js';
@@ -25,8 +26,8 @@ const require = createRequire(import.meta.url);
 const pinoHttp = require('pino-http');
 
 interface McpSession {
-  server: Server;
-  transport: SSEServerTransport;
+  server: McpServer;
+  transport: StreamableHTTPServerTransport;
   harvestClient: HarvestClient;
 }
 
@@ -52,9 +53,9 @@ export function createApp(config: Config, logger: Logger): Express {
     credentials: true,
   }));
 
-  // Skip JSON parsing for /mcp/message - the MCP SDK needs to read the raw body
+  // Skip JSON parsing for /mcp - the MCP SDK may need to read the raw body
   app.use((req, res, next) => {
-    if (req.path === '/mcp/message') {
+    if (req.path === '/mcp') {
       return next();
     }
     express.json()(req, res, next);
@@ -475,150 +476,172 @@ export function createApp(config: Config, logger: Logger): Express {
     }
   });
 
-  // MCP protocol endpoints using SSE transport
-  // GET /mcp - Establish SSE connection
-  app.get('/mcp', async (req: Request, res: Response) => {
+  // MCP protocol endpoint using Streamable HTTP transport
+  // Unified endpoint for POST, GET, and DELETE requests
+  const handleMcpRequest = async (req: Request, res: Response) => {
     try {
-      let harvestTokens;
-      let harvestAccountId;
-      let userId;
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      let transport: StreamableHTTPServerTransport;
 
-      // Check for Bearer token authentication (for MCP clients)
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const accessToken = authHeader.substring(7);
-        const decoded = jwtService.verifyToken(accessToken);
+      if (sessionId && mcpSessions.has(sessionId)) {
+        // Reuse existing session
+        const session = mcpSessions.get(sessionId)!;
+        transport = session.transport;
+        logger.debug({ sessionId, method: req.method }, 'Reusing existing MCP session');
+      } else if (!sessionId && req.method === 'POST') {
+        // Check if this is an initialization request
+        let body = req.body;
+        if (!body) {
+          // Parse body if not already parsed
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          }
+          const bodyText = Buffer.concat(chunks).toString();
+          try {
+            body = JSON.parse(bodyText);
+          } catch (e) {
+            return res.status(400).json({
+              jsonrpc: '2.0',
+              error: {
+                code: -32700,
+                message: 'Parse error: Invalid JSON'
+              },
+              id: null
+            });
+          }
+        }
 
-        if (!decoded) {
-          return res.status(401).json({
-            error: 'Invalid or expired access token',
-            message: 'Please re-authenticate',
+        if (!isInitializeRequest(body)) {
+          return res.status(400).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'Bad Request: No valid session ID provided and request is not an initialization request'
+            },
+            id: null
           });
         }
 
-        harvestTokens = decoded.harvestTokens;
-        harvestAccountId = decoded.accountId;
-        userId = decoded.userId;
-        logger.debug({ userId }, 'Bearer token authentication successful');
-      } else {
-        // Fall back to session-based authentication (for browser)
-        const credentials = getHarvestTokens(req.session);
-        if (!credentials) {
-          return res.status(401).json({
-            error: 'Not authenticated',
-            message: 'Please authenticate with Harvest first',
-            authUrl: '/auth/harvest',
-          });
+        // Authenticate before creating new session
+        let harvestTokens;
+        let harvestAccountId;
+        let userId;
+
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          const accessToken = authHeader.substring(7);
+          const decoded = jwtService.verifyToken(accessToken);
+
+          if (!decoded) {
+            return res.status(401).json({
+              error: 'Invalid or expired access token',
+              message: 'Please re-authenticate',
+            });
+          }
+
+          harvestTokens = decoded.harvestTokens;
+          harvestAccountId = decoded.accountId;
+          userId = decoded.userId;
+          logger.debug({ userId }, 'Bearer token authentication successful');
+        } else {
+          const credentials = getHarvestTokens(req.session);
+          if (!credentials) {
+            return res.status(401).json({
+              error: 'Not authenticated',
+              message: 'Please authenticate with Harvest first',
+              authUrl: '/auth/harvest',
+            });
+          }
+
+          harvestTokens = credentials.tokens;
+          harvestAccountId = credentials.accountId;
+          userId = req.session.harvestUserId;
+          logger.debug({ userId }, 'Session authentication successful');
         }
 
-        harvestTokens = credentials.tokens;
-        harvestAccountId = credentials.accountId;
-        userId = req.session.harvestUserId;
-        logger.debug({ userId }, 'Session authentication successful');
-      }
+        // Create new session
+        const harvestClient = new HarvestClient(
+          harvestTokens.access_token,
+          harvestAccountId,
+          logger
+        );
 
-      // Create Harvest client for this session
-      const harvestClient = new HarvestClient(
-        harvestTokens.access_token,
-        harvestAccountId,
-        logger
-      );
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomBytes(16).toString('hex'),
+          onsessioninitialized: (newSessionId) => {
+            logger.info({ userId, sessionId: newSessionId, totalActiveSessions: mcpSessions.size + 1 }, 'MCP session initialized');
+          },
+          onsessionclosed: (closedSessionId) => {
+            logger.info({ sessionId: closedSessionId }, 'MCP session closed');
+            mcpSessions.delete(closedSessionId);
+          }
+        });
 
-      // Create SSE transport
-      const transport = new SSEServerTransport('/mcp/message', res);
+        // Clean up transport when closed
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            mcpSessions.delete(transport.sessionId);
+          }
+        };
 
-      // Create new MCP server instance for this session
-      const mcpServer = new Server(
-        {
+        const mcpServer = new McpServer({
           name: 'harvest-server',
           version: '0.2.0',
-        },
-        {
-          capabilities: {
-            tools: {},
-          },
+        });
+
+        // Setup tool handlers
+        let currentClient: HarvestClient | null = harvestClient;
+        mcpToolHandlers.setupHandlers(mcpServer, () => currentClient);
+
+        // Connect server to transport
+        await mcpServer.connect(transport);
+
+        // Store session (will have sessionId after connection)
+        if (transport.sessionId) {
+          mcpSessions.set(transport.sessionId, {
+            server: mcpServer,
+            transport,
+            harvestClient,
+          });
         }
-      );
 
-      // Setup tool handlers for this server
-      let currentClient: HarvestClient | null = harvestClient;
-      mcpToolHandlers.setupHandlers(mcpServer, () => currentClient);
+        // Handle the request with the body we already parsed
+        await transport.handleRequest(req, res, body);
+        return;
+      } else {
+        // Invalid request
+        return res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Bad Request: No valid session ID provided'
+          },
+          id: null
+        });
+      }
 
-      // Store session
-      mcpSessions.set(transport.sessionId, {
-        server: mcpServer,
-        transport,
-        harvestClient,
-      });
-
-      logger.info({
-        userId,
-        sessionId: transport.sessionId,
-        totalActiveSessions: mcpSessions.size,
-      }, 'MCP SSE connection established');
-
-      // Handle connection close
-      mcpServer.onclose = () => {
-        logger.info({ sessionId: transport.sessionId }, 'MCP session closed');
-        mcpSessions.delete(transport.sessionId);
-      };
-
-      // Connect the server to the transport
-      await mcpServer.connect(transport);
+      // Handle request for existing session
+      await transport.handleRequest(req, res);
     } catch (error) {
-      logger.error({ error }, 'Error establishing MCP SSE connection');
-      res.status(500).json({
-        error: 'Failed to establish MCP connection',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  });
-
-  // POST /mcp/message - Handle MCP messages via POST
-  // NOTE: This endpoint does NOT use express.json() middleware because the MCP SDK's
-  // handlePostMessage needs to read the raw request body stream using getRawBody().
-  // Body parsing is explicitly skipped for this endpoint in the middleware setup above.
-  app.post('/mcp/message', async (req: Request, res: Response) => {
-    try {
-      const sessionId = req.query.sessionId as string;
-
-      if (!sessionId) {
-        logger.warn('POST /mcp/message called without sessionId');
-        return res.status(400).send('Missing sessionId');
-      }
-
-      const session = mcpSessions.get(sessionId);
-      if (!session) {
-        logger.warn({ sessionId, activeSessions: Array.from(mcpSessions.keys()) }, 'Session not found');
-        return res.status(404).send('Session not found');
-      }
-
-      logger.info({
-        sessionId,
-        contentType: req.headers['content-type'],
-        contentLength: req.headers['content-length']
-      }, 'Received MCP message');
-
-      // Let the transport handle the POST message (it will read the raw body)
-      try {
-        await session.transport.handlePostMessage(req, res);
-        logger.debug({ sessionId }, 'MCP message handled successfully');
-      } catch (transportError) {
-        logger.error({
-          error: transportError,
-          sessionId,
-          errorMessage: transportError instanceof Error ? transportError.message : 'Unknown error',
-          errorStack: transportError instanceof Error ? transportError.stack : undefined
-        }, 'Transport handlePostMessage failed');
-        throw transportError;
-      }
-    } catch (error) {
-      logger.error({ error }, 'Error processing MCP message');
+      logger.error({ error, method: req.method }, 'Error handling MCP request');
       if (!res.headersSent) {
-        res.status(500).send('Error processing message');
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal server error'
+          },
+          id: null
+        });
       }
     }
-  });
+  };
+
+  // Register handlers for all HTTP methods used by Streamable HTTP transport
+  app.post('/mcp', handleMcpRequest);
+  app.get('/mcp', handleMcpRequest);
+  app.delete('/mcp', handleMcpRequest);
 
   // Error handling middleware
   app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
