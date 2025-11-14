@@ -567,10 +567,25 @@ export function createApp(config: Config, logger: Logger): Express {
           logger
         );
 
+        const mcpServer = new McpServer({
+          name: 'harvest-server',
+          version: '0.2.0',
+        });
+
+        // Setup tool handlers
+        let currentClient: HarvestClient | null = harvestClient;
+        mcpToolHandlers.setupHandlers(mcpServer, () => currentClient);
+
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomBytes(16).toString('hex'),
           onsessioninitialized: (newSessionId) => {
-            logger.info({ userId, sessionId: newSessionId, totalActiveSessions: mcpSessions.size + 1 }, 'MCP session initialized');
+            // Store session when it's initialized
+            mcpSessions.set(newSessionId, {
+              server: mcpServer,
+              transport,
+              harvestClient,
+            });
+            logger.info({ userId, sessionId: newSessionId, totalActiveSessions: mcpSessions.size }, 'MCP session initialized');
           },
           onsessionclosed: (closedSessionId) => {
             logger.info({ sessionId: closedSessionId }, 'MCP session closed');
@@ -585,26 +600,8 @@ export function createApp(config: Config, logger: Logger): Express {
           }
         };
 
-        const mcpServer = new McpServer({
-          name: 'harvest-server',
-          version: '0.2.0',
-        });
-
-        // Setup tool handlers
-        let currentClient: HarvestClient | null = harvestClient;
-        mcpToolHandlers.setupHandlers(mcpServer, () => currentClient);
-
         // Connect server to transport
         await mcpServer.connect(transport);
-
-        // Store session (will have sessionId after connection)
-        if (transport.sessionId) {
-          mcpSessions.set(transport.sessionId, {
-            server: mcpServer,
-            transport,
-            harvestClient,
-          });
-        }
 
         // Handle the request with the body we already parsed
         await transport.handleRequest(req, res, body);
