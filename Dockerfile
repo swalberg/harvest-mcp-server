@@ -1,6 +1,6 @@
 # Multi-stage build for optimized image size
 
-# Stage 1: Build
+# Stage 1: Build and Test
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -8,6 +8,7 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 COPY tsconfig.json ./
+COPY jest.config.js ./
 
 # Install dependencies (skip prepare script, we'll build manually)
 RUN npm ci --ignore-scripts
@@ -17,6 +18,9 @@ COPY src ./src
 
 # Build TypeScript
 RUN npm run build
+
+# Run tests - build will fail if tests don't pass
+RUN npm test
 
 # Stage 2: Production
 FROM node:20-alpine
