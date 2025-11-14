@@ -271,6 +271,10 @@ describe('OAuth Provider Endpoints', () => {
       });
       expect(tokenResponse.body.access_token).toBeTruthy();
       expect(typeof tokenResponse.body.access_token).toBe('string');
+
+      // Verify token is in JWT format (header.payload.signature)
+      const tokenParts = tokenResponse.body.access_token.split('.');
+      expect(tokenParts).toHaveLength(3);
     });
 
     it('should reject authorization code with mismatched redirect_uri', async () => {

@@ -5,6 +5,7 @@ An HTTP-based MCP server that provides natural language time tracking for Harves
 ## Features
 
 - 🔐 OAuth 2.0 authentication with Harvest
+- 🔑 Stateless JWT tokens with encrypted credentials (MCP clients)
 - 🗣️ Natural language time entry parsing
 - 🏖️ Special leave request handling (e.g., "I'm off sick today")
 - ⏰ Configurable work day hours
@@ -19,7 +20,8 @@ An HTTP-based MCP server that provides natural language time tracking for Harves
 
 This is a single-tenant, multi-user HTTP-based MCP server where:
 - Multiple users from the same Harvest company can authenticate
-- Each user's OAuth tokens are stored in their session
+- Browser users: OAuth tokens stored in session (Redis or in-memory)
+- MCP clients: OAuth tokens encrypted in stateless JWT Bearer tokens
 - The server makes Harvest API calls on behalf of authenticated users
 - Containerized for easy deployment in Kubernetes or other platforms
 

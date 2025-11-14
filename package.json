@@ -28,6 +28,7 @@
     "@types/express": "^5.0.5",
     "@types/express-session": "^1.18.2",
     "@types/ioredis": "^4.28.10",
+    "@types/jsonwebtoken": "^9.0.10",
     "axios": "^1.7.9",
     "chrono-node": "^2.7.8",
     "connect-redis": "^7.1.1",
@@ -36,6 +37,7 @@
     "express": "^5.1.0",
     "express-session": "^1.18.2",
     "ioredis": "^5.8.2",
+    "jsonwebtoken": "^9.0.2",
     "pino": "^10.1.0",
     "pino-http": "^11.0.0"
   },

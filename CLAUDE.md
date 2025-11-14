@@ -20,12 +20,13 @@ This is a Harvest MCP (Model Context Protocol) Server that acts as an OAuth brid
 
 ### Key Components
 
-- **Token Store** (`src/token-store.ts`): Redis-backed store (with in-memory fallback) mapping local Bearer tokens to Harvest credentials
-- **Redis Client** (`src/redis-client.ts`): Redis client factory and connection management
+- **JWT Service** (`src/jwt-service.ts`): Stateless JWT token generation and verification with encrypted Harvest credentials
+- **Auth Code Store** (`src/token-store.ts`): Redis-backed store (with in-memory fallback) for temporary OAuth authorization codes (5 min TTL)
+- **Redis Client** (`src/redis-client.ts`): Redis client factory and connection management (optional - for persistence)
 - **OAuth Service** (`src/oauth.ts`): Handles Harvest OAuth flow (token exchange, refresh)
 - **MCP Tools** (`src/mcp-tools.ts`): Implements MCP tool handlers for Harvest operations
 - **Express App** (`src/app.ts`): All HTTP endpoints and middleware
-- **Session Management** (`src/session.ts`): Session types and auth middleware
+- **Session Management** (`src/session.ts`): Session types and auth middleware (for browser flows)
 
 ## Testing Requirements
 
@@ -54,7 +55,7 @@ npm run test:watch        # Watch mode
 npm run test:coverage     # Coverage report
 ```
 
-**Current Test Count**: 56 tests across 6 test suites (including Redis persistence tests)
+**Current Test Count**: 132 tests across 8 test suites (including JWT and auth code tests)
 
 ## OAuth Provider Implementation
 
@@ -74,9 +75,10 @@ npm run test:coverage     # Coverage report
    - Returns authorization code to MCP client after Harvest auth
 
 4. **Token Exchange**: `POST /oauth/token`
-   - Exchanges authorization code for Bearer token
+   - Exchanges authorization code for JWT Bearer token
    - Validates redirect_uri, code expiration
-   - Returns access_token valid for 7 days
+   - Returns JWT access_token (stateless) valid for 7 days
+   - JWT contains encrypted Harvest credentials
 
 5. **MCP Endpoint**: `POST /mcp`
    - Accepts Bearer token OR session authentication
@@ -100,7 +102,7 @@ Optional:
 - `TIMEZONE`: Timezone for time operations (default: Australia/Perth)
 - `LOG_LEVEL`: Logging level (default: info)
 
-Redis (optional - for persistence across restarts and multi-instance deployments):
+Redis (optional - for persistence of sessions and temporary auth codes):
 - `REDIS_URL`: Complete Redis connection URL (e.g., `redis://user:password@host:port`)
   - OR use individual parameters:
 - `REDIS_HOST`: Redis server hostname
@@ -108,7 +110,10 @@ Redis (optional - for persistence across restarts and multi-instance deployments
 - `REDIS_PASSWORD`: Redis password (if required)
 - `REDIS_TLS`: Enable TLS for Redis connection (true/false)
 
-**Note**: If Redis is not configured, the server falls back to in-memory storage. This works for single-instance deployments but sessions and tokens will be lost on restart.
+**Note**: If Redis is not configured, the server falls back to in-memory storage. Access tokens are now JWTs (stateless) so Redis is only needed for:
+1. Session persistence (browser flows)
+2. Temporary authorization codes (5 min TTL)
+3. Multi-instance deployments
 
 ## Development Practices
 
@@ -160,26 +165,41 @@ The server exposes these Harvest operations as MCP tools:
 The server supports two authentication modes:
 
 1. **Session-based** (Browser): Uses express-session with cookies
-2. **Bearer token** (MCP clients): Uses tokens from token store
+   - Session stored in Redis or in-memory
+   - Harvest credentials stored in session
+   - Used for browser-based interactions
 
-Both modes work with the same Harvest credentials stored in different ways.
+2. **JWT Bearer token** (MCP clients): Uses stateless JWT tokens
+   - JWT contains encrypted Harvest credentials (AES-256-GCM)
+   - Signed with SESSION_SECRET for integrity
+   - No server-side storage required (stateless)
+   - Valid for 7 days
+   - Self-contained authentication
+
+Both modes provide access to the same Harvest API operations.
 
 ## Multi-User Architecture
 
 - **Single-tenant**: One Harvest account/company
 - **Multi-user**: Multiple users from same company
-- **Token Storage**: Redis (with automatic fallback to in-memory)
-- **Session Storage**: Redis (with automatic fallback to in-memory)
+- **Access Tokens**: JWT (stateless, no storage needed)
+- **Auth Codes**: Redis or in-memory (temporary, 5 min TTL)
+- **Sessions**: Redis or in-memory (browser flows)
 
 ### Storage Modes
 
-1. **Development/Single-Instance**: Without Redis configuration, uses in-memory storage. Fast and simple but sessions/tokens are lost on restart.
+1. **Development/Single-Instance**: Without Redis configuration, uses in-memory storage.
+   - Auth codes stored in memory (5 min TTL)
+   - Sessions stored in memory
+   - Access tokens are JWTs (no storage needed)
+   - Lost on restart, but JWTs remain valid until expiration
 
-2. **Production/Multi-Instance**: With Redis configured via environment variables, provides:
+2. **Production/Multi-Instance**: With Redis configured via environment variables:
    - Persistent sessions across server restarts
    - Shared session state for multiple server instances
-   - Token persistence for OAuth access tokens
-   - Automatic TTL-based expiration
+   - Shared auth codes for OAuth flow
+   - JWTs remain stateless (no Redis needed for access tokens)
+   - Automatic TTL-based expiration for sessions and auth codes
 
 ### Redis Configuration
 
@@ -192,10 +212,13 @@ See Configuration section above for details.
 ## Security Considerations
 
 1. **CSRF Protection**: State parameter in OAuth flow
-2. **Token Expiration**: Authorization codes expire in 5 minutes
+2. **Token Expiration**: Authorization codes expire in 5 minutes, JWTs expire in 7 days
 3. **Secure Cookies**: HttpOnly, Secure flags in production
 4. **Token Redaction**: Sensitive fields redacted in logs
 5. **One-time Codes**: Authorization codes are single-use
+6. **JWT Encryption**: Harvest credentials encrypted with AES-256-GCM in JWT payload
+7. **JWT Signing**: JWTs signed with SESSION_SECRET to prevent tampering
+8. **Stateless Security**: No server-side token storage means no centralized attack surface for access tokens
 
 ## Common Tasks
 
@@ -233,9 +256,10 @@ If modifying OAuth provider endpoints:
 - Verify SESSION_SECRET is set
 
 ### Token Issues
-- Tokens expire after 7 days
-- Harvest tokens expire after 18 hours (refresh needed)
-- Check token-store for valid tokens
+- JWTs expire after 7 days (cannot be revoked, must wait for expiration)
+- Harvest tokens inside JWTs expire after 18 hours (need to re-authenticate)
+- Invalid JWT signature means SESSION_SECRET has changed or token was tampered with
+- Authorization codes expire after 5 minutes (must restart OAuth flow)
 
 ## Related Documentation
 

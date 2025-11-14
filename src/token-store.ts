@@ -1,21 +1,14 @@
 /**
- * Token store for OAuth provider with Redis support
- * Maps local access tokens to Harvest credentials
+ * Authorization code store for OAuth provider with Redis support
+ * Handles temporary authorization codes (5 min TTL) for OAuth flow
  * Falls back to in-memory storage if Redis is not available
+ *
+ * Note: Access tokens are now handled by JWT service (stateless)
  */
 import { randomBytes } from 'crypto';
 import type { Redis } from 'ioredis';
 import { HarvestTokens } from './harvest-client.js';
 import { Logger } from './logger.js';
-
-export interface StoredToken {
-  accessToken: string;
-  harvestTokens: HarvestTokens;
-  harvestAccountId: string;
-  harvestUserId: number;
-  expiresAt: number;
-  createdAt: number;
-}
 
 export interface StoredAuthCode {
   code: string;
@@ -27,8 +20,7 @@ export interface StoredAuthCode {
   createdAt: number;
 }
 
-export class TokenStore {
-  private tokens: Map<string, StoredToken> = new Map();
+export class AuthCodeStore {
   private authCodes: Map<string, StoredAuthCode> = new Map();
   private logger: Logger;
   private redis: Redis | null;
@@ -38,153 +30,10 @@ export class TokenStore {
     this.redis = redis;
 
     if (redis) {
-      this.logger.info('TokenStore using Redis for persistence');
+      this.logger.info('AuthCodeStore using Redis for persistence');
     } else {
-      this.logger.info('TokenStore using in-memory storage');
+      this.logger.info('AuthCodeStore using in-memory storage');
     }
-  }
-
-  /**
-   * Generate a new access token
-   */
-  generateToken(): string {
-    return randomBytes(32).toString('hex');
-  }
-
-  /**
-   * Store a new token mapping
-   */
-  async storeToken(
-    harvestTokens: HarvestTokens,
-    harvestAccountId: string,
-    harvestUserId: number
-  ): Promise<string> {
-    const accessToken = this.generateToken();
-    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
-    const tokenData: StoredToken = {
-      accessToken,
-      harvestTokens,
-      harvestAccountId,
-      harvestUserId,
-      expiresAt,
-      createdAt: Date.now(),
-    };
-
-    if (this.redis) {
-      // Store in Redis with TTL
-      const key = `harvest:token:${accessToken}`;
-      const ttlSeconds = Math.floor((expiresAt - Date.now()) / 1000);
-      await this.redis.setex(key, ttlSeconds, JSON.stringify(tokenData));
-    } else {
-      // Store in memory
-      this.tokens.set(accessToken, tokenData);
-    }
-
-    this.logger.info(
-      { userId: harvestUserId, tokenPrefix: accessToken.substring(0, 8) },
-      'Stored new access token'
-    );
-
-    // Clean up expired tokens (in-memory only)
-    if (!this.redis) {
-      this.cleanupExpiredTokens();
-    }
-
-    return accessToken;
-  }
-
-  /**
-   * Retrieve token data by access token
-   */
-  async getToken(accessToken: string): Promise<StoredToken | null> {
-    if (this.redis) {
-      // Get from Redis
-      const key = `harvest:token:${accessToken}`;
-      const data = await this.redis.get(key);
-
-      if (!data) {
-        return null;
-      }
-
-      try {
-        const token = JSON.parse(data) as StoredToken;
-
-        // Double-check expiration (Redis TTL should handle this, but be defensive)
-        if (Date.now() > token.expiresAt) {
-          this.logger.info({ tokenPrefix: accessToken.substring(0, 8) }, 'Token expired');
-          await this.redis.del(key);
-          return null;
-        }
-
-        return token;
-      } catch (error) {
-        this.logger.error({ error }, 'Failed to parse token from Redis');
-        return null;
-      }
-    } else {
-      // Get from memory
-      const token = this.tokens.get(accessToken);
-
-      if (!token) {
-        return null;
-      }
-
-      // Check if expired
-      if (Date.now() > token.expiresAt) {
-        this.logger.info({ tokenPrefix: accessToken.substring(0, 8) }, 'Token expired');
-        this.tokens.delete(accessToken);
-        return null;
-      }
-
-      return token;
-    }
-  }
-
-  /**
-   * Revoke a token
-   */
-  async revokeToken(accessToken: string): Promise<boolean> {
-    if (this.redis) {
-      const key = `harvest:token:${accessToken}`;
-      const result = await this.redis.del(key);
-      const existed = result > 0;
-      if (existed) {
-        this.logger.info({ tokenPrefix: accessToken.substring(0, 8) }, 'Token revoked');
-      }
-      return existed;
-    } else {
-      const existed = this.tokens.delete(accessToken);
-      if (existed) {
-        this.logger.info({ tokenPrefix: accessToken.substring(0, 8) }, 'Token revoked');
-      }
-      return existed;
-    }
-  }
-
-  /**
-   * Clean up expired tokens
-   */
-  private cleanupExpiredTokens(): void {
-    const now = Date.now();
-    let cleaned = 0;
-
-    for (const [token, data] of this.tokens.entries()) {
-      if (now > data.expiresAt) {
-        this.tokens.delete(token);
-        cleaned++;
-      }
-    }
-
-    if (cleaned > 0) {
-      this.logger.info({ count: cleaned }, 'Cleaned up expired tokens');
-    }
-  }
-
-  /**
-   * Get count of active tokens
-   */
-  getTokenCount(): number {
-    return this.tokens.size;
   }
 
   /**
@@ -317,7 +166,7 @@ export class TokenStore {
   }
 
   /**
-   * Clean up expired authorization codes
+   * Clean up expired authorization codes (in-memory only)
    */
   private cleanupExpiredAuthCodes(): void {
     const now = Date.now();
@@ -333,5 +182,12 @@ export class TokenStore {
     if (cleaned > 0) {
       this.logger.info({ count: cleaned }, 'Cleaned up expired authorization codes');
     }
+  }
+
+  /**
+   * Get count of active authorization codes (for testing/monitoring)
+   */
+  getAuthCodeCount(): number {
+    return this.authCodes.size;
   }
 }

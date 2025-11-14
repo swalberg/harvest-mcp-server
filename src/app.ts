@@ -16,7 +16,8 @@ import { OAuthService } from './oauth.js';
 import { HarvestClient } from './harvest-client.js';
 import { requireAuth, getHarvestTokens } from './session.js';
 import { McpToolHandlers } from './mcp-tools.js';
-import { TokenStore } from './token-store.js';
+import { AuthCodeStore } from './token-store.js';
+import { JwtService } from './jwt-service.js';
 import { OAuthStateManager } from './oauth-state.js';
 import { createRedisClient } from './redis-client.js';
 
@@ -38,7 +39,8 @@ export function createApp(config: Config, logger: Logger): Express {
   // Services
   const oauthService = new OAuthService(config, logger);
   const mcpToolHandlers = new McpToolHandlers(config, logger);
-  const tokenStore = new TokenStore(logger, redisClient);
+  const authCodeStore = new AuthCodeStore(logger, redisClient);
+  const jwtService = new JwtService(config.sessionSecret, logger);
   const oauthStateManager = new OAuthStateManager(config.sessionSecret);
 
   // Track active MCP sessions
@@ -278,7 +280,7 @@ export function createApp(config: Config, logger: Logger): Express {
       // Check if this is part of OAuth provider flow (stateless state has clientId/redirectUri)
       if (stateData.clientId && stateData.redirectUri) {
         // Generate and store authorization code for MCP client
-        const authCode = await tokenStore.storeAuthCode(
+        const authCode = await authCodeStore.storeAuthCode(
           req.session.harvestTokens!,
           req.session.harvestAccountId!,
           user.id,
@@ -404,7 +406,7 @@ export function createApp(config: Config, logger: Logger): Express {
       }
 
       // Consume the authorization code (one-time use, with redirect URI verification)
-      const authData = await tokenStore.consumeAuthCode(code, redirect_uri);
+      const authData = await authCodeStore.consumeAuthCode(code, redirect_uri);
       if (!authData) {
         return res.status(400).json({
           error: 'invalid_grant',
@@ -412,14 +414,14 @@ export function createApp(config: Config, logger: Logger): Express {
         });
       }
 
-      // Generate access token
-      const accessToken = await tokenStore.storeToken(
+      // Generate JWT access token with encrypted Harvest credentials
+      const accessToken = jwtService.generateToken(
         authData.harvestTokens,
         authData.harvestAccountId,
         authData.harvestUserId
       );
 
-      logger.info({ userId: authData.harvestUserId }, 'Access token issued for MCP client');
+      logger.info({ userId: authData.harvestUserId }, 'JWT access token issued for MCP client');
 
       res.json({
         access_token: accessToken,
@@ -485,18 +487,18 @@ export function createApp(config: Config, logger: Logger): Express {
       const authHeader = req.headers.authorization;
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const accessToken = authHeader.substring(7);
-        const tokenData = await tokenStore.getToken(accessToken);
+        const decoded = jwtService.verifyToken(accessToken);
 
-        if (!tokenData) {
+        if (!decoded) {
           return res.status(401).json({
             error: 'Invalid or expired access token',
             message: 'Please re-authenticate',
           });
         }
 
-        harvestTokens = tokenData.harvestTokens;
-        harvestAccountId = tokenData.harvestAccountId;
-        userId = tokenData.harvestUserId;
+        harvestTokens = decoded.harvestTokens;
+        harvestAccountId = decoded.accountId;
+        userId = decoded.userId;
         logger.debug({ userId }, 'Bearer token authentication successful');
       } else {
         // Fall back to session-based authentication (for browser)
