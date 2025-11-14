@@ -24,6 +24,13 @@ export interface Config {
 
   // Logging Configuration
   logLevel: string;
+
+  // Redis Configuration (optional - falls back to in-memory if not set)
+  redisUrl?: string;
+  redisHost?: string;
+  redisPort?: number;
+  redisPassword?: string;
+  redisTls?: boolean;
 }
 
 function getRequiredEnvVar(name: string): string {
@@ -41,6 +48,13 @@ function getOptionalEnvVar(name: string, defaultValue: string): string {
 export function loadConfig(): Config {
   const port = parseInt(getOptionalEnvVar('PORT', '3000'), 10);
   const serverBaseUrl = getOptionalEnvVar('SERVER_BASE_URL', `http://localhost:${port}`);
+
+  // Parse Redis configuration
+  const redisUrl = process.env.REDIS_URL;
+  const redisHost = process.env.REDIS_HOST;
+  const redisPort = process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT, 10) : undefined;
+  const redisPassword = process.env.REDIS_PASSWORD;
+  const redisTls = process.env.REDIS_TLS === 'true';
 
   return {
     // OAuth Configuration (for Harvest)
@@ -64,5 +78,12 @@ export function loadConfig(): Config {
 
     // Logging Configuration
     logLevel: getOptionalEnvVar('LOG_LEVEL', 'info'),
+
+    // Redis Configuration (optional)
+    redisUrl,
+    redisHost,
+    redisPort,
+    redisPassword,
+    redisTls,
   };
 }

@@ -20,7 +20,8 @@ This is a Harvest MCP (Model Context Protocol) Server that acts as an OAuth brid
 
 ### Key Components
 
-- **Token Store** (`src/token-store.ts`): In-memory store mapping local Bearer tokens to Harvest credentials
+- **Token Store** (`src/token-store.ts`): Redis-backed store (with in-memory fallback) mapping local Bearer tokens to Harvest credentials
+- **Redis Client** (`src/redis-client.ts`): Redis client factory and connection management
 - **OAuth Service** (`src/oauth.ts`): Handles Harvest OAuth flow (token exchange, refresh)
 - **MCP Tools** (`src/mcp-tools.ts`): Implements MCP tool handlers for Harvest operations
 - **Express App** (`src/app.ts`): All HTTP endpoints and middleware
@@ -53,7 +54,7 @@ npm run test:watch        # Watch mode
 npm run test:coverage     # Coverage report
 ```
 
-**Current Test Count**: 42 tests across 5 test suites
+**Current Test Count**: 56 tests across 6 test suites (including Redis persistence tests)
 
 ## OAuth Provider Implementation
 
@@ -98,6 +99,16 @@ Optional:
 - `STANDARD_WORK_DAY_HOURS`: Default work hours (default: 7.5)
 - `TIMEZONE`: Timezone for time operations (default: Australia/Perth)
 - `LOG_LEVEL`: Logging level (default: info)
+
+Redis (optional - for persistence across restarts and multi-instance deployments):
+- `REDIS_URL`: Complete Redis connection URL (e.g., `redis://user:password@host:port`)
+  - OR use individual parameters:
+- `REDIS_HOST`: Redis server hostname
+- `REDIS_PORT`: Redis server port (default: 6379)
+- `REDIS_PASSWORD`: Redis password (if required)
+- `REDIS_TLS`: Enable TLS for Redis connection (true/false)
+
+**Note**: If Redis is not configured, the server falls back to in-memory storage. This works for single-instance deployments but sessions and tokens will be lost on restart.
 
 ## Development Practices
 
@@ -157,12 +168,26 @@ Both modes work with the same Harvest credentials stored in different ways.
 
 - **Single-tenant**: One Harvest account/company
 - **Multi-user**: Multiple users from same company
-- **Token Storage**: In-memory (no persistence)
-- **Session Storage**: In-memory (express-session default)
+- **Token Storage**: Redis (with automatic fallback to in-memory)
+- **Session Storage**: Redis (with automatic fallback to in-memory)
 
-For production with multiple servers, consider:
-- Redis for session storage
-- Database for token persistence
+### Storage Modes
+
+1. **Development/Single-Instance**: Without Redis configuration, uses in-memory storage. Fast and simple but sessions/tokens are lost on restart.
+
+2. **Production/Multi-Instance**: With Redis configured via environment variables, provides:
+   - Persistent sessions across server restarts
+   - Shared session state for multiple server instances
+   - Token persistence for OAuth access tokens
+   - Automatic TTL-based expiration
+
+### Redis Configuration
+
+Configure Redis using either:
+- Single `REDIS_URL` environment variable, or
+- Individual `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_TLS` variables
+
+See Configuration section above for details.
 
 ## Security Considerations
 

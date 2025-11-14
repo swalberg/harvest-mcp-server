@@ -3,6 +3,7 @@
  */
 import express, { Request, Response, NextFunction, Express } from 'express';
 import session from 'express-session';
+import RedisStore from 'connect-redis';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { createRequire } from 'module';
@@ -17,6 +18,7 @@ import { requireAuth, getHarvestTokens } from './session.js';
 import { McpToolHandlers } from './mcp-tools.js';
 import { TokenStore } from './token-store.js';
 import { OAuthStateManager } from './oauth-state.js';
+import { createRedisClient } from './redis-client.js';
 
 const require = createRequire(import.meta.url);
 const pinoHttp = require('pino-http');
@@ -30,10 +32,13 @@ interface McpSession {
 export function createApp(config: Config, logger: Logger): Express {
   const app = express();
 
+  // Create Redis client if configured
+  const redisClient = createRedisClient(config, logger);
+
   // Services
   const oauthService = new OAuthService(config, logger);
   const mcpToolHandlers = new McpToolHandlers(config, logger);
-  const tokenStore = new TokenStore(logger);
+  const tokenStore = new TokenStore(logger, redisClient);
   const oauthStateManager = new OAuthStateManager(config.sessionSecret);
 
   // Track active MCP sessions
@@ -57,21 +62,32 @@ export function createApp(config: Config, logger: Logger): Express {
   app.use(cookieParser());
 
   // Session configuration
-  app.use(
-    session({
-      secret: config.sessionSecret,
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        httpOnly: true,
-        secure: config.nodeEnv === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      },
-      // Force session to be saved back to the session store on every request
-      rolling: true,
-    })
-  );
+  const sessionConfig: session.SessionOptions = {
+    secret: config.sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: config.nodeEnv === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    },
+    // Force session to be saved back to the session store on every request
+    rolling: true,
+  };
+
+  // Use Redis for session storage if available
+  if (redisClient) {
+    logger.info('Using Redis for session storage');
+    sessionConfig.store = new RedisStore({
+      client: redisClient,
+      prefix: 'harvest:session:',
+    });
+  } else {
+    logger.info('Using in-memory session storage');
+  }
+
+  app.use(session(sessionConfig));
 
   // HTTP request logging
   app.use(
@@ -262,7 +278,7 @@ export function createApp(config: Config, logger: Logger): Express {
       // Check if this is part of OAuth provider flow (stateless state has clientId/redirectUri)
       if (stateData.clientId && stateData.redirectUri) {
         // Generate and store authorization code for MCP client
-        const authCode = tokenStore.storeAuthCode(
+        const authCode = await tokenStore.storeAuthCode(
           req.session.harvestTokens!,
           req.session.harvestAccountId!,
           user.id,
@@ -388,7 +404,7 @@ export function createApp(config: Config, logger: Logger): Express {
       }
 
       // Consume the authorization code (one-time use, with redirect URI verification)
-      const authData = tokenStore.consumeAuthCode(code, redirect_uri);
+      const authData = await tokenStore.consumeAuthCode(code, redirect_uri);
       if (!authData) {
         return res.status(400).json({
           error: 'invalid_grant',
@@ -397,7 +413,7 @@ export function createApp(config: Config, logger: Logger): Express {
       }
 
       // Generate access token
-      const accessToken = tokenStore.storeToken(
+      const accessToken = await tokenStore.storeToken(
         authData.harvestTokens,
         authData.harvestAccountId,
         authData.harvestUserId
@@ -469,7 +485,7 @@ export function createApp(config: Config, logger: Logger): Express {
       const authHeader = req.headers.authorization;
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const accessToken = authHeader.substring(7);
-        const tokenData = tokenStore.getToken(accessToken);
+        const tokenData = await tokenStore.getToken(accessToken);
 
         if (!tokenData) {
           return res.status(401).json({
