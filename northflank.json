@@ -72,17 +72,7 @@
                     "files": {},
                     "dockerSecretMounts": {}
                   },
-                  "addonDependencies": [
-                    {
-                      "addonId": "${refs.harvest-mcp-redis-prd.id}",
-                      "keys": [
-                        {
-                          "keyName": "REDIS_MASTER_URL",
-                          "aliases": []
-                        }
-                      ]
-                    }
-                  ],
+                  "addonDependencies": [],
                   "name": "harvest-mcp-secrets-prd",
                   "restrictions": {
                     "restricted": false,
@@ -182,13 +172,24 @@
                       "STANDARD_WORK_DAY_HOURS": "8",
                       "TIMEZONE": "America/New_York",
                       "LOG_LEVEL": "debug",
-                      "SERVER_BASE_URL": "https://${refs.harvest-mcp-prd.ports.0.dns}",
-                      "REDIS_URL": "${NF_HARVEST_REDIS_REDIS_MASTER_URL}"
+                      "SERVER_BASE_URL": "https://${refs.harvest-mcp-prd.ports.0.dns}"
                     },
                     "files": {},
                     "dockerSecretMounts": {}
                   },
-                  "addonDependencies": [],
+                  "addonDependencies": [
+                    {
+                      "addonId": "${refs.harvest-mcp-redis-prd.id}",
+                      "keys": [
+                        {
+                          "keyName": "REDIS_MASTER_URL",
+                          "aliases": [
+                            "REDIS_URL"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
                   "name": "harvest-mcp-config-prd",
                   "restrictions": {
                     "restricted": false,
