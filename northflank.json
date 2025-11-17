@@ -65,7 +65,7 @@
                 "kind": "SecretGroup",
                 "spec": {
                   "type": "secret",
-                  "secretType": "environment-arguments",
+                  "secretType": "environment",
                   "priority": 10,
                   "secrets": {
                     "variables": "${refs.harvest-mcp-secret-inheritance.values}",
@@ -154,7 +154,30 @@
                     "pathIgnoreRules": [],
                     "isAllowList": false,
                     "ciIgnoreFlagsEnabled": false
-                  }
+                  },
+                  "healthChecks": [
+                    {
+                      "type": "readinessProbe",
+                      "protocol": "HTTP",
+                      "path": "/health",
+                      "port": 3000,
+                      "initialDelaySeconds": 5,
+                      "periodSeconds": 60,
+                      "timeoutSeconds": 10,
+                      "failureThreshold": 3,
+                      "successThreshold": 1
+                    },
+                    {
+                      "type": "livenessProbe",
+                      "protocol": "HTTP",
+                      "path": "/health",
+                      "port": 3000,
+                      "initialDelaySeconds": 5,
+                      "periodSeconds": 60,
+                      "timeoutSeconds": 10,
+                      "failureThreshold": 3
+                    }
+                  ]
                 },
                 "ref": "harvest-mcp-prd"
               },
