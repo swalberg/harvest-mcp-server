@@ -68,7 +68,7 @@
                   "secretType": "environment-arguments",
                   "priority": 10,
                   "secrets": {
-                    "variables": {},
+                    "variables": "${refs.harvest-mcp-secret-inheritance.values}",
                     "files": {},
                     "dockerSecretMounts": {}
                   },
