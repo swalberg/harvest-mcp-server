@@ -1,0 +1,51 @@
+{
+  "apiVersion": "v1.2",
+  "spec": {
+    "kind": "Workflow",
+    "spec": {
+      "type": "sequential",
+      "steps": [
+        {
+          "kind": "Project",
+          "ref": "project",
+          "spec": {
+            "name": "harvest-mcp",
+            "color": "#57637A",
+            "networking": {
+              "tailscale": {
+                "authKeyTags": [],
+                "enabled": false
+              },
+              "allowedIngressProjects": []
+            },
+            "clusterId": "tiny-cluster"
+          }
+        },
+        {
+          "kind": "Workflow",
+          "spec": {
+            "type": "sequential",
+            "context": {
+              "projectId": "${refs.project.id}"
+            },
+            "steps": []
+          }
+        }
+      ]
+    }
+  },
+  "name": "harvest-mcp-prd",
+  "description": "",
+  "options": {
+    "autorun": false,
+    "concurrencyPolicy": "allow"
+  },
+  "gitops": {
+    "repoUrl": "https://github.com/swalberg/harvest-mcp-server",
+    "vcsService": "github",
+    "accountLogin": "swalberg",
+    "branch": "main",
+    "filePath": "/northflank.json"
+  },
+  "$schema": "https://api.northflank.com/v1/schemas/template"
+}
