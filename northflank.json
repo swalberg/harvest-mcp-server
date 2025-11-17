@@ -28,7 +28,156 @@
             "context": {
               "projectId": "${refs.project.id}"
             },
-            "steps": []
+            "steps": [
+              {
+                "kind": "SecretInheritance",
+                "spec": {
+                  "secrets": [
+                    "harvest-mcp-prd"
+                  ]
+                },
+                "ref": "harvest-mcp-secret-inheritance"
+              },
+              {
+                "kind": "Addon",
+                "spec": {
+                  "externalAccessEnabled": false,
+                  "type": "redis",
+                  "billing": {
+                    "replicas": 1,
+                    "storage": 4096,
+                    "storageClass": "ssd",
+                    "deploymentPlan": "nf-compute-10"
+                  },
+                  "tlsEnabled": true,
+                  "infrastructure": {
+                    "architecture": "x86"
+                  },
+                  "typeSpecificSettings": {
+                    "redisSentinelEnabled": false
+                  },
+                  "name": "harvest-mcp-redis-prd",
+                  "version": "7.2.4"
+                },
+                "ref": "harvest-mcp-redis-prd"
+              },
+              {
+                "kind": "SecretGroup",
+                "spec": {
+                  "type": "secret",
+                  "secretType": "environment-arguments",
+                  "priority": 10,
+                  "secrets": {
+                    "variables": {},
+                    "files": {},
+                    "dockerSecretMounts": {}
+                  },
+                  "addonDependencies": [
+                    {
+                      "addonId": "${refs.harvest-mcp-redis-prd.id}",
+                      "keys": [
+                        {
+                          "keyName": "REDIS_MASTER_URL",
+                          "aliases": []
+                        }
+                      ]
+                    }
+                  ],
+                  "name": "harvest-mcp-secrets-prd",
+                  "restrictions": {
+                    "restricted": false,
+                    "nfObjects": [],
+                    "tags": []
+                  }
+                },
+                "ref": "harvest-mcp-secrets-prd"
+              },
+              {
+                "kind": "CombinedService",
+                "spec": {
+                  "deployment": {
+                    "instances": 1,
+                    "storage": {
+                      "ephemeralStorage": {
+                        "storageSize": 1024
+                      },
+                      "shmSize": 64
+                    },
+                    "docker": {
+                      "configType": "default"
+                    }
+                  },
+                  "loadBalancing": {
+                    "mode": "leastConnection"
+                  },
+                  "buildSettings": {
+                    "storage": {
+                      "ephemeralStorage": {
+                        "storageSize": 16384
+                      }
+                    },
+                    "dockerfile": {
+                      "buildEngine": "buildkit",
+                      "dockerWorkDir": "/",
+                      "dockerFilePath": "/Dockerfile",
+                      "buildkit": {
+                        "useCache": false,
+                        "cacheStorageSize": 16384
+                      }
+                    }
+                  },
+                  "billing": {
+                    "deploymentPlan": "unbounded-300m",
+                    "buildPlan": "nf-compute-400-16"
+                  },
+                  "runtimeEnvironment": {
+                    "OAUTH_REDIRECT_URI": "${service.web.public_ports[0].hostname}/auth/callback",
+                    "PORT": "3000",
+                    "NODE_ENV": "production",
+                    "STANDARD_WORK_DAY_HOURS": "8",
+                    "TIMEZONE": "America/New_York",
+                    "LOG_LEVEL": "info",
+                    "SERVER_BASE_URL": "${service.web.public_ports[0].hostname}",
+                    "REDIS_URL": "${NF_HARVEST_REDIS_REDIS_MASTER_URL}"
+                  },
+                  "runtimeFiles": {},
+                  "buildArguments": {},
+                  "buildFiles": {},
+                  "dockerSecretMounts": {},
+                  "infrastructure": {
+                    "architecture": "x86"
+                  },
+                  "name": "harvest-mcp-prd",
+                  "vcsData": {
+                    "projectType": "github",
+                    "accountLogin": "swalberg",
+                    "projectUrl": "https://github.com/swalberg/harvest-mcp-server",
+                    "projectBranch": "main"
+                  },
+                  "ports": [
+                    {
+                      "internalPort": 3000,
+                      "protocol": "HTTP",
+                      "name": "p01",
+                      "public": true,
+                      "domains": [],
+                      "security": {
+                        "policies": [],
+                        "credentials": []
+                      },
+                      "disableNfDomain": false
+                    }
+                  ],
+                  "disabledCI": false,
+                  "buildConfiguration": {
+                    "pathIgnoreRules": [],
+                    "isAllowList": false,
+                    "ciIgnoreFlagsEnabled": false
+                  }
+                },
+                "ref": "harvest-mcp-prd"
+              }
+            ]
           }
         }
       ]
