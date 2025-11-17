@@ -130,16 +130,7 @@
                     "deploymentPlan": "unbounded-300m",
                     "buildPlan": "nf-compute-400-16"
                   },
-                  "runtimeEnvironment": {
-                    "OAUTH_REDIRECT_URI": "${refs.harvest-mcp-prd.ports.0.dns}/auth/callback",
-                    "PORT": "3000",
-                    "NODE_ENV": "production",
-                    "STANDARD_WORK_DAY_HOURS": "8",
-                    "TIMEZONE": "America/New_York",
-                    "LOG_LEVEL": "info",
-                    "SERVER_BASE_URL": "${refs.harvest-mcp-prd.ports.0.dns}",
-                    "REDIS_URL": "${NF_HARVEST_REDIS_REDIS_MASTER_URL}"
-                  },
+                  "runtimeEnvironment": {},
                   "runtimeFiles": {},
                   "buildArguments": {},
                   "buildFiles": {},
@@ -176,6 +167,27 @@
                   }
                 },
                 "ref": "harvest-mcp-prd"
+              },
+              {
+                "kind": "SecretGroup",
+                "spec": {
+                  "type": "secret",
+                  "secretType": "environment",
+                  "priority": 10,
+                  "secrets": {
+                    "variables": {},
+                    "files": {},
+                    "dockerSecretMounts": {}
+                  },
+                  "addonDependencies": [],
+                  "name": "harvest-mcp-config-prd",
+                  "restrictions": {
+                    "restricted": false,
+                    "nfObjects": [],
+                    "tags": []
+                  }
+                },
+                "ref": "harvest-mcp-config-prd"
               }
             ]
           }
