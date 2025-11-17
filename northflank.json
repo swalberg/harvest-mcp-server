@@ -175,7 +175,16 @@
                   "secretType": "environment",
                   "priority": 10,
                   "secrets": {
-                    "variables": {},
+                    "variables": {
+                      "OAUTH_REDIRECT_URI": "https://${refs.harvest-mcp-prd.ports0.dns}/auth/callback",
+                      "PORT": "3000",
+                      "NODE_ENV": "production",
+                      "STANDARD_WORK_DAY_HOURS": "8",
+                      "TIMEZONE": "America/New_York",
+                      "LOG_LEVEL": "debug",
+                      "SERVER_BASE_URL": "https://${refs.harvest-mcp-prd.ports0.dns}",
+                      "REDIS_URL": "${NF_HARVEST_REDIS_REDIS_MASTER_URL}"
+                    },
                     "files": {},
                     "dockerSecretMounts": {}
                   },
